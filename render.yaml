@@ -1,0 +1,17 @@
+services:
+  - type: web
+    name: drawio-editor
+    env: static
+    buildCommand: echo "No build required"
+    staticPublishPath: ./src/main/webapp
+    headers:
+      - path: /*
+        name: X-Frame-Options
+        value: SAMEORIGIN
+      - path: /*
+        name: Content-Security-Policy
+        value: "default-src 'self' 'unsafe-inline' 'unsafe-eval' data: https:; img-src 'self' data: https: blob:; connect-src 'self' https:;"
+    routes:
+      - type: rewrite
+        source: /*
+        destination: /index.html
