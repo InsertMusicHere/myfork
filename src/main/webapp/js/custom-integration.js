@@ -1,6 +1,11 @@
-// src/main/webapp/js/custom-integration.js
+// Enhanced custom-integration.js for draw.io
 (function() {
     'use strict';
+    
+    let sessionId = '';
+    let autoSave = false;
+    let parentOrigin = '';
+    let hasUnsavedChanges = false;
     
     // Wait for draw.io to be fully loaded
     function waitForDrawio() {
@@ -14,127 +19,335 @@
     function initCustomIntegration() {
         // Get URL parameters
         const urlParams = new URLSearchParams(window.location.search);
-        const sessionId = urlParams.get('sessionId');
-        const returnUrl = urlParams.get('returnUrl');
+        sessionId = urlParams.get('sessionId') || '';
+        autoSave = urlParams.get('autoSave') === 'true';
+        parentOrigin = urlParams.get('origin') || '';
         const mode = urlParams.get('mode');
         const existingDiagram = urlParams.get('existingDiagram');
+        
+        console.log('Draw.io integration initialized:', { sessionId, autoSave, mode });
         
         // Load existing diagram if provided
         if (existingDiagram && mode === 'edit') {
             try {
                 const diagramData = atob(existingDiagram);
                 const doc = mxUtils.parseXml(diagramData);
-                const codec = new mxCodec(doc);
-                const model = codec.decode(doc.documentElement);
                 window.ui.editor.setGraphXml(doc.documentElement);
+                console.log('Existing diagram loaded successfully');
             } catch (error) {
                 console.error('Failed to load existing diagram:', error);
             }
         }
         
-        // Override the save function
-        const originalSave = window.ui.actions.actions.save.funct;
-        window.ui.actions.actions.save.funct = function() {
-            handleCustomSave();
-        };
+        // Set up change tracking
+        setupChangeTracking();
         
-        // Add custom save button
-        const toolbar = document.querySelector('.geToolbar');
-        if (toolbar) {
-            const saveBtn = document.createElement('button');
-            saveBtn.innerHTML = 'Save & Return';
-            saveBtn.className = 'geBtn';
-            saveBtn.style.marginLeft = '10px';
-            saveBtn.onclick = handleCustomSave;
-            toolbar.appendChild(saveBtn);
+        // Override existing save actions
+        overrideSaveActions();
+        
+        // Add custom UI elements
+        addCustomUIElements();
+        
+        // Set up keyboard shortcuts
+        setupKeyboardShortcuts();
+        
+        // Listen for messages from parent window
+        setupMessageListeners();
+        
+        // Set up auto-save if enabled
+        if (autoSave) {
+            setupAutoSave();
+        }
+    }
+    
+    function setupChangeTracking() {
+        const graph = window.ui.editor.graph;
+        const model = graph.getModel();
+        
+        // Track model changes
+        model.addListener(mxEvent.CHANGE, function() {
+            hasUnsavedChanges = true;
+        });
+        
+        // Track when changes are saved
+        window.addEventListener('diagram-saved', function() {
+            hasUnsavedChanges = false;
+        });
+    }
+    
+    function overrideSaveActions() {
+        // Override the default save action
+        if (window.ui.actions && window.ui.actions.actions.save) {
+            const originalSave = window.ui.actions.actions.save.funct;
+            window.ui.actions.actions.save.funct = function() {
+                handleSaveAndPublish();
+            };
         }
         
-        // Add keyboard shortcut
+        // Override saveAs if needed
+        if (window.ui.actions && window.ui.actions.actions.saveAs) {
+            const originalSaveAs = window.ui.actions.actions.saveAs.funct;
+            window.ui.actions.actions.saveAs.funct = function() {
+                handleSaveAndPublish();
+            };
+        }
+    }
+    
+    function addCustomUIElements() {
+        // Add custom save button to toolbar
+        const toolbar = document.querySelector('.geMenubar');
+        if (toolbar) {
+            // Create save button
+            const saveBtn = document.createElement('button');
+            saveBtn.innerHTML = '💾 Save & Publish';
+            saveBtn.className = 'geBtn gePrimaryBtn';
+            saveBtn.style.cssText = `
+                margin-left: 10px;
+                background: #4CAF50;
+                color: white;
+                border: none;
+                padding: 8px 16px;
+                border-radius: 4px;
+                cursor: pointer;
+                font-size: 12px;
+                font-weight: 500;
+            `;
+            saveBtn.onclick = handleSaveAndPublish;
+            toolbar.appendChild(saveBtn);
+            
+            // Add auto-save button if enabled
+            if (autoSave) {
+                const autoSaveBtn = document.createElement('button');
+                autoSaveBtn.innerHTML = '📄 Quick Save';
+                autoSaveBtn.className = 'geBtn';
+                autoSaveBtn.style.cssText = `
+                    margin-left: 5px;
+                    background: #2196F3;
+                    color: white;
+                    border: none;
+                    padding: 8px 16px;
+                    border-radius: 4px;
+                    cursor: pointer;
+                    font-size: 12px;
+                    font-weight: 500;
+                `;
+                autoSaveBtn.onclick = handleAutoSave;
+                toolbar.appendChild(autoSaveBtn);
+            }
+        }
+        
+        // Add status indicator
+        addStatusIndicator();
+    }
+    
+    function addStatusIndicator() {
+        const statusDiv = document.createElement('div');
+        statusDiv.id = 'custom-status';
+        statusDiv.style.cssText = `
+            position: fixed;
+            top: 10px;
+            right: 10px;
+            background: #f0f0f0;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+            padding: 5px 10px;
+            font-size: 12px;
+            z-index: 1000;
+        `;
+        statusDiv.innerHTML = '✅ Ready';
+        document.body.appendChild(statusDiv);
+    }
+    
+    function updateStatus(message, type = 'info') {
+        const statusDiv = document.getElementById('custom-status');
+        if (statusDiv) {
+            const icons = {
+                info: '📝',
+                success: '✅',
+                error: '❌',
+                warning: '⚠️'
+            };
+            statusDiv.innerHTML = `${icons[type]} ${message}`;
+            statusDiv.style.background = {
+                info: '#e3f2fd',
+                success: '#e8f5e8',
+                error: '#ffebee',
+                warning: '#fff3e0'
+            }[type];
+        }
+    }
+    
+    function setupKeyboardShortcuts() {
         document.addEventListener('keydown', function(e) {
             if ((e.ctrlKey || e.metaKey) && e.key === 's') {
                 e.preventDefault();
-                handleCustomSave();
+                handleSaveAndPublish();
+            }
+            
+            if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === 'S') {
+                e.preventDefault();
+                handleAutoSave();
             }
         });
     }
     
-    function handleCustomSave() {
+    function setupMessageListeners() {
+        window.addEventListener('message', function(event) {
+            if (event.origin !== parentOrigin) return;
+            
+            try {
+                const data = JSON.parse(event.data);
+                
+                if (data.action === 'trigger_save' && data.sessionId === sessionId) {
+                    handleSaveAndPublish();
+                } else if (data.action === 'trigger_auto_save' && data.sessionId === sessionId) {
+                    handleAutoSave();
+                }
+            } catch (error) {
+                console.error('Error parsing message:', error);
+            }
+        });
+    }
+    
+    function setupAutoSave() {
+        // Auto-save every 30 seconds if there are unsaved changes
+        setInterval(function() {
+            if (hasUnsavedChanges) {
+                console.log('Auto-saving diagram...');
+                handleAutoSave();
+            }
+        }, 30000);
+    }
+    
+    function handleSaveAndPublish() {
+        updateStatus('Saving diagram...', 'info');
+        
         try {
-            const graph = window.ui.editor.graph;
-            const xmlData = mxUtils.getXml(window.ui.editor.getGraphXml());
+            const { imageData, diagramData } = exportDiagram();
             
-            // Export as PNG
-            const bounds = graph.getGraphBounds();
-            const scale = 1;
-            const border = 10;
+            // Send to parent window
+            sendToParent({
+                action: 'diagram_saved',
+                imageData: imageData,
+                diagramData: diagramData,
+                sessionId: sessionId
+            });
             
-            const imgExport = new mxImageExport();
-            const canvas = document.createElement('canvas');
-            const ctx = canvas.getContext('2d');
+            // Dispatch custom event
+            window.dispatchEvent(new CustomEvent('diagram-saved'));
             
-            canvas.width = Math.ceil(bounds.width * scale) + 2 * border;
-            canvas.height = Math.ceil(bounds.height * scale) + 2 * border;
+            updateStatus('Saved & Published!', 'success');
             
-            const imgCanvas = new mxXmlCanvas2D(canvas);
-            imgCanvas.translate(Math.floor(border - bounds.x * scale), Math.floor(border - bounds.y * scale));
-            imgCanvas.scale(scale);
-            
-            imgExport.drawState(graph.getView().getState(graph.model.root), imgCanvas);
-            
-            const imageData = canvas.toDataURL('image/png');
-            
-            // Return to parent application
-            returnToParent(imageData, xmlData);
+            // Close window after a short delay
+            setTimeout(() => {
+                window.close();
+            }, 1000);
             
         } catch (error) {
             console.error('Save failed:', error);
+            updateStatus('Save failed!', 'error');
             alert('Failed to save diagram. Please try again.');
         }
     }
     
-    function returnToParent(imageData, diagramData) {
-        const urlParams = new URLSearchParams(window.location.search);
-        const returnUrl = urlParams.get('returnUrl');
-        const sessionId = urlParams.get('sessionId');
+    function handleAutoSave() {
+        updateStatus('Auto-saving...', 'info');
         
-        if (returnUrl) {
-            const params = new URLSearchParams({
-                imageData: encodeURIComponent(imageData),
-                diagramData: encodeURIComponent(diagramData),
-                sessionId: sessionId || ''
+        try {
+            const { imageData, diagramData } = exportDiagram();
+            
+            // Send to parent window
+            sendToParent({
+                action: 'diagram_auto_saved',
+                imageData: imageData,
+                diagramData: diagramData,
+                sessionId: sessionId
             });
             
-            window.location.href = `${returnUrl}?${params.toString()}`;
-        } else {
-            // Fallback: post message to parent window
-            if (window.opener) {
-                window.opener.postMessage(
-                    JSON.stringify({
-                        action: 'diagram_saved',
-                        imageData: imageData,
-                        diagramData: diagramData,
-                        sessionId: sessionId
-                    }),
-                    '*'
-                );
-                window.close();
-            }
+            // Dispatch custom event
+            window.dispatchEvent(new CustomEvent('diagram-saved'));
+            
+            updateStatus('Auto-saved!', 'success');
+            
+            // Reset status after 3 seconds
+            setTimeout(() => {
+                updateStatus('Ready', 'info');
+            }, 3000);
+            
+        } catch (error) {
+            console.error('Auto-save failed:', error);
+            updateStatus('Auto-save failed!', 'error');
         }
     }
     
-    // Handle cancel/close
-    window.addEventListener('beforeunload', function() {
-        if (window.opener) {
-            window.opener.postMessage(
-                JSON.stringify({
-                    action: 'diagram_cancelled',
-                    sessionId: new URLSearchParams(window.location.search).get('sessionId')
-                }),
-                '*'
-            );
+    function exportDiagram() {
+        const graph = window.ui.editor.graph;
+        const xmlData = mxUtils.getXml(window.ui.editor.getGraphXml());
+        
+        // Export as high-quality PNG
+        const bounds = graph.getGraphBounds();
+        const scale = 2; // Higher resolution
+        const border = 20;
+        
+        // Create canvas for export
+        const canvas = document.createElement('canvas');
+        const ctx = canvas.getContext('2d');
+        
+        canvas.width = Math.ceil(bounds.width * scale) + 2 * border;
+        canvas.height = Math.ceil(bounds.height * scale) + 2 * border;
+        
+        // Fill background
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        
+        // Create XML canvas for rendering
+        const xmlCanvas = new mxXmlCanvas2D(canvas);
+        xmlCanvas.translate(Math.floor(border - bounds.x * scale), Math.floor(border - bounds.y * scale));
+        xmlCanvas.scale(scale);
+        
+        // Export the diagram
+        const imgExport = new mxImageExport();
+        imgExport.drawState(graph.getView().getState(graph.model.root), xmlCanvas);
+        
+        const imageData = canvas.toDataURL('image/png', 0.9);
+        
+        return {
+            imageData: imageData,
+            diagramData: xmlData
+        };
+    }
+    
+    function sendToParent(data) {
+        if (window.opener && parentOrigin) {
+            window.opener.postMessage(JSON.stringify(data), parentOrigin);
+        } else if (window.parent && parentOrigin) {
+            window.parent.postMessage(JSON.stringify(data), parentOrigin);
+        } else {
+            console.warn('No parent window found or origin not set');
         }
+    }
+    
+    // Handle window close
+    window.addEventListener('beforeunload', function(e) {
+        if (hasUnsavedChanges) {
+            const message = 'You have unsaved changes. Are you sure you want to leave?';
+            e.returnValue = message;
+            return message;
+        }
+        
+        // Send cancel message
+        sendToParent({
+            action: 'diagram_cancelled',
+            sessionId: sessionId
+        });
     });
     
-    // Start the integration
-    waitForDrawio();
+    // Initialize when DOM is ready
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', waitForDrawio);
+    } else {
+        waitForDrawio();
+    }
+    
+    console.log('Draw.io custom integration script loaded');
 })();
