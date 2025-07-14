@@ -284,12 +284,13 @@
         const graph = window.ui.editor.graph;
         const xmlData = mxUtils.getXml(window.ui.editor.getGraphXml());
         
-        // Export as high-quality PNG
+        // Use draw.io's built-in export functionality
         const bounds = graph.getGraphBounds();
         const scale = 2; // Higher resolution
         const border = 20;
         
-        // Create canvas for export
+        // Use draw.io's built-in PNG export
+        const imgExport = new mxImageExport();
         const canvas = document.createElement('canvas');
         const ctx = canvas.getContext('2d');
         
@@ -300,14 +301,18 @@
         ctx.fillStyle = '#ffffff';
         ctx.fillRect(0, 0, canvas.width, canvas.height);
         
-        // Create XML canvas for rendering
+        // Use mxImageExport to render to canvas
         const xmlCanvas = new mxXmlCanvas2D(canvas);
         xmlCanvas.translate(Math.floor(border - bounds.x * scale), Math.floor(border - bounds.y * scale));
         xmlCanvas.scale(scale);
         
-        // Export the diagram
-        const imgExport = new mxImageExport();
-        imgExport.drawState(graph.getView().getState(graph.model.root), xmlCanvas);
+        // Render the graph
+        const view = graph.getView();
+        const rootState = view.getState(graph.model.root);
+        
+        if (rootState) {
+            imgExport.drawState(rootState, xmlCanvas);
+        }
         
         const imageData = canvas.toDataURL('image/png', 0.9);
         
