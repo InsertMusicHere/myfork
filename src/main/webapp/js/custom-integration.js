@@ -191,20 +191,34 @@
         });
     }
     
+
     function setupMessageListeners() {
         window.addEventListener('message', function(event) {
-            if (event.origin !== parentOrigin) return;
+            console.log('Received message from:', event.origin);
+            console.log('Expected origin contains:', parentOrigin);
+            
+            // More flexible origin check
+            if (parentOrigin && !event.origin.includes(new URL(parentOrigin).hostname)) {
+                console.log('Message rejected - wrong origin');
+                return;
+            }
             
             try {
                 const data = JSON.parse(event.data);
+                console.log('Processing message:', data);
                 
                 if (data.action === 'trigger_save' && data.sessionId === sessionId) {
+                    console.log('Triggering save from message...');
                     handleSaveAndPublish();
                 } else if (data.action === 'trigger_auto_save' && data.sessionId === sessionId) {
+                    console.log('Triggering auto-save from message...');
                     handleAutoSave();
+                } else {
+                    console.log('Message ignored - wrong action or sessionId');
                 }
             } catch (error) {
                 console.error('Error parsing message:', error);
+                console.error('Raw message:', event.data);
             }
         });
     }
@@ -323,13 +337,35 @@
     }
     
     function sendToParent(data) {
-        if (window.opener && parentOrigin) {
-            window.opener.postMessage(JSON.stringify(data), parentOrigin);
-        } else if (window.parent && parentOrigin) {
-            window.parent.postMessage(JSON.stringify(data), parentOrigin);
-        } else {
-            console.warn('No parent window found or origin not set');
+        console.log('Sending to parent:', data);
+        console.log('Parent origin:', parentOrigin);
+        
+        const message = JSON.stringify(data);
+        
+        // Try window.opener first (for popup windows)
+        if (window.opener && !window.opener.closed) {
+            console.log('Sending via window.opener');
+            try {
+                window.opener.postMessage(message, parentOrigin);
+                return true;
+            } catch (error) {
+                console.error('Error sending to opener:', error);
+            }
         }
+        
+        // Fallback to window.parent (for iframes)
+        if (window.parent && window.parent !== window) {
+            console.log('Sending via window.parent');
+            try {
+                window.parent.postMessage(message, parentOrigin);
+                return true;
+            } catch (error) {
+                console.error('Error sending to parent:', error);
+            }
+        }
+        
+        console.error('No valid parent window found');
+        return false;
     }
     
     // Handle window close
