@@ -358,7 +358,6 @@
 // })();
 
 
-// Enhanced custom-integration.js for draw.io
 (function() {
     'use strict';
     
@@ -368,7 +367,7 @@
     let hasUnsavedChanges = false;
     let customButtonsAdded = false;
     let initializationRetries = 0;
-    const MAX_INIT_RETRIES = 20;
+    const MAX_INIT_RETRIES = 30;
     
     // Debug function to log UI state
     function debugUIState() {
@@ -382,6 +381,8 @@
         console.log('menubar exists:', !!(window.ui && window.ui.menubar));
         console.log('DOM loaded:', document.readyState);
         console.log('Available toolbars:', document.querySelectorAll('.geMenubar, .geToolbar, #geMenubar, .geMenubarContainer').length);
+        console.log('Body classes:', document.body.className);
+        console.log('Available divs:', document.querySelectorAll('div').length);
         console.log('=============================');
     }
     
@@ -389,7 +390,7 @@
     function waitForDrawio() {
         initializationRetries++;
         
-        if (initializationRetries % 5 === 0) {
+        if (initializationRetries % 10 === 0) {
             debugUIState();
         }
         
@@ -400,7 +401,8 @@
             window.ui.editor && 
             window.ui.editor.graph &&
             window.ui.actions &&
-            document.readyState === 'complete'
+            document.readyState === 'complete' &&
+            document.body.children.length > 0
         );
         
         if (isDrawioReady) {
@@ -408,13 +410,16 @@
             // Add a small delay to ensure UI is fully rendered
             setTimeout(() => {
                 initCustomIntegration();
-            }, 500);
+            }, 1000);
         } else if (initializationRetries < MAX_INIT_RETRIES) {
             setTimeout(waitForDrawio, 500);
         } else {
             console.error('Failed to initialize draw.io after maximum retries');
-            // Try to add floating buttons as fallback
-            addFloatingButtons();
+            // Force try to add floating buttons as fallback
+            setTimeout(() => {
+                addFloatingButtons();
+                notifyParentOfButtonsReady();
+            }, 1000);
         }
     }
     
@@ -449,11 +454,27 @@
                 setupAutoSave();
             }
             
+            // Notify parent that buttons are ready
+            setTimeout(() => {
+                notifyParentOfButtonsReady();
+            }, 500);
+            
         } catch (error) {
             console.error('Failed to initialize custom integration:', error);
             // Fallback to floating buttons
-            addFloatingButtons();
+            setTimeout(() => {
+                addFloatingButtons();
+                notifyParentOfButtonsReady();
+            }, 1000);
         }
+    }
+    
+    function notifyParentOfButtonsReady() {
+        sendToParent({
+            action: 'custom_buttons_ready',
+            sessionId: sessionId,
+            timestamp: Date.now()
+        });
     }
     
     function loadExistingDiagram(existingDiagram) {
@@ -470,44 +491,39 @@
     function addCustomUIElements() {
         if (customButtonsAdded) return;
         
-        // Try multiple approaches to add buttons
-        let success = false;
+        console.log('Attempting to add custom UI elements...');
         
-        // Approach 1: Try to add to existing toolbar
-        success = tryAddToToolbar();
+        // Always try floating buttons first (most reliable)
+        addFloatingButtons();
         
-        if (!success) {
-            // Approach 2: Try to add to menubar
-            success = tryAddToMenubar();
-        }
-        
-        if (!success) {
-            // Approach 3: Create floating buttons
-            console.log('Falling back to floating buttons');
-            addFloatingButtons();
-        }
+        // Also try to add to toolbar if possible
+        setTimeout(() => {
+            tryAddToToolbar();
+        }, 2000);
         
         // Always add status indicator
         addStatusIndicator();
     }
     
     function tryAddToToolbar() {
+        if (customButtonsAdded) return false;
+        
         const toolbarSelectors = [
             '.geMenubar',
             '.geToolbar', 
             '#geMenubar',
             '.geMenubarContainer',
             '.geToolbarContainer',
-            '[data-action="toolbar"]'
+            '[data-action="toolbar"]',
+            'div[style*="position: absolute"][style*="top: 0px"]'
         ];
         
         for (const selector of toolbarSelectors) {
             const toolbar = document.querySelector(selector);
-            if (toolbar) {
-                console.log(`Found toolbar with selector: ${selector}`);
+            if (toolbar && toolbar.offsetHeight > 0) {
+                console.log(`Found visible toolbar with selector: ${selector}`);
                 try {
                     addButtonsToElement(toolbar);
-                    customButtonsAdded = true;
                     return true;
                 } catch (error) {
                     console.error(`Failed to add buttons to ${selector}:`, error);
@@ -515,21 +531,22 @@
             }
         }
         
-        return false;
-    }
-    
-    function tryAddToMenubar() {
-        // Try to find the menubar or any container
-        const containers = document.querySelectorAll('div[style*="toolbar"], div[style*="menubar"], .geMenubar, .geToolbar');
-        
-        for (const container of containers) {
-            try {
-                console.log('Trying to add buttons to container:', container);
-                addButtonsToElement(container);
-                customButtonsAdded = true;
-                return true;
-            } catch (error) {
-                console.error('Failed to add buttons to container:', error);
+        // Try to find any div that looks like a toolbar
+        const allDivs = document.querySelectorAll('div');
+        for (const div of allDivs) {
+            const style = window.getComputedStyle(div);
+            if (style.position === 'absolute' && 
+                div.offsetTop < 100 && 
+                div.offsetHeight > 20 && 
+                div.offsetHeight < 100 &&
+                div.offsetWidth > 200) {
+                console.log('Found potential toolbar div:', div);
+                try {
+                    addButtonsToElement(div);
+                    return true;
+                } catch (error) {
+                    console.error('Failed to add buttons to potential toolbar:', error);
+                }
             }
         }
         
@@ -537,15 +554,21 @@
     }
     
     function addButtonsToElement(parentElement) {
+        // Check if we already added buttons to this element
+        if (parentElement.querySelector('.custom-button-container')) {
+            return;
+        }
+        
         // Create container for our buttons
         const buttonContainer = document.createElement('div');
         buttonContainer.className = 'custom-button-container';
         buttonContainer.style.cssText = `
-            display: inline-flex;
-            gap: 8px;
-            margin: 0 10px;
-            align-items: center;
-            z-index: 10000;
+            display: inline-flex !important;
+            gap: 8px !important;
+            margin: 0 10px !important;
+            align-items: center !important;
+            z-index: 10000 !important;
+            position: relative !important;
         `;
         
         // Create save button
@@ -565,7 +588,8 @@
             parentElement.appendChild(buttonContainer);
         }
         
-        console.log('Buttons added to toolbar successfully');
+        console.log('Buttons added to toolbar element successfully');
+        customButtonsAdded = true;
     }
     
     function createSaveButton() {
@@ -585,6 +609,7 @@
             transition: all 0.3s ease !important;
             text-shadow: 0 1px 2px rgba(0,0,0,0.1) !important;
             z-index: 10001 !important;
+            position: relative !important;
         `;
         
         saveBtn.addEventListener('mouseenter', () => {
@@ -623,6 +648,7 @@
             transition: all 0.3s ease !important;
             text-shadow: 0 1px 2px rgba(0,0,0,0.1) !important;
             z-index: 10001 !important;
+            position: relative !important;
         `;
         
         autoSaveBtn.addEventListener('mouseenter', () => {
@@ -644,401 +670,372 @@
         return autoSaveBtn;
     }
     
+    // Add floating buttons as fallback
     function addFloatingButtons() {
-        if (document.getElementById('custom-floating-buttons')) {
-            return; // Already added
+        // Remove existing floating buttons
+        const existingFloating = document.getElementById('custom-floating-buttons');
+        if (existingFloating) {
+            existingFloating.remove();
         }
         
-        // Create floating button container
         const floatingContainer = document.createElement('div');
         floatingContainer.id = 'custom-floating-buttons';
         floatingContainer.style.cssText = `
             position: fixed !important;
             top: 20px !important;
             right: 20px !important;
-            z-index: 10000 !important;
             display: flex !important;
             flex-direction: column !important;
             gap: 10px !important;
-            background: rgba(255, 255, 255, 0.98) !important;
-            padding: 15px !important;
-            border-radius: 12px !important;
-            box-shadow: 0 8px 32px rgba(0,0,0,0.15) !important;
-            backdrop-filter: blur(10px) !important;
-            border: 1px solid rgba(255,255,255,0.2) !important;
-            min-width: 200px !important;
+            z-index: 99999 !important;
+            pointer-events: auto !important;
         `;
         
-        // Create save button
-        const saveBtn = document.createElement('button');
-        saveBtn.innerHTML = '💾 Save & Return to Document';
-        saveBtn.style.cssText = `
-            background: linear-gradient(135deg, #4CAF50, #45a049) !important;
-            color: white !important;
-            border: none !important;
-            padding: 12px 20px !important;
-            border-radius: 8px !important;
-            cursor: pointer !important;
-            font-size: 13px !important;
-            font-weight: 600 !important;
-            box-shadow: 0 4px 12px rgba(76, 175, 80, 0.3) !important;
-            transition: all 0.3s ease !important;
-            text-shadow: 0 1px 2px rgba(0,0,0,0.1) !important;
-        `;
-        
-        saveBtn.addEventListener('mouseenter', () => {
-            saveBtn.style.transform = 'translateY(-2px)';
-            saveBtn.style.boxShadow = '0 6px 16px rgba(76, 175, 80, 0.4)';
-        });
-        
-        saveBtn.addEventListener('mouseleave', () => {
-            saveBtn.style.transform = 'translateY(0)';
-            saveBtn.style.boxShadow = '0 4px 12px rgba(76, 175, 80, 0.3)';
-        });
-        
-        saveBtn.onclick = handleSaveAndReturn;
+        const saveBtn = createSaveButton();
         floatingContainer.appendChild(saveBtn);
         
-        // Add auto-save button if enabled
         if (autoSave) {
-            const autoSaveBtn = document.createElement('button');
-            autoSaveBtn.innerHTML = '📄 Quick Save';
-            autoSaveBtn.style.cssText = `
-                background: linear-gradient(135deg, #2196F3, #1976D2) !important;
-                color: white !important;
-                border: none !important;
-                padding: 12px 20px !important;
-                border-radius: 8px !important;
-                cursor: pointer !important;
-                font-size: 13px !important;
-                font-weight: 600 !important;
-                box-shadow: 0 4px 12px rgba(33, 150, 243, 0.3) !important;
-                transition: all 0.3s ease !important;
-                text-shadow: 0 1px 2px rgba(0,0,0,0.1) !important;
-            `;
-            
-            autoSaveBtn.addEventListener('mouseenter', () => {
-                autoSaveBtn.style.transform = 'translateY(-2px)';
-                autoSaveBtn.style.boxShadow = '0 6px 16px rgba(33, 150, 243, 0.4)';
-            });
-            
-            autoSaveBtn.addEventListener('mouseleave', () => {
-                autoSaveBtn.style.transform = 'translateY(0)';
-                autoSaveBtn.style.boxShadow = '0 4px 12px rgba(33, 150, 243, 0.3)';
-            });
-            
-            autoSaveBtn.onclick = handleAutoSave;
+            const autoSaveBtn = createAutoSaveButton();
             floatingContainer.appendChild(autoSaveBtn);
         }
         
         document.body.appendChild(floatingContainer);
-        customButtonsAdded = true;
         console.log('Floating buttons added successfully');
     }
     
-    function setupChangeTracking() {
-        try {
-            const graph = window.ui.editor.graph;
-            const model = graph.getModel();
-            
-            // Track model changes
-            model.addListener(mxEvent.CHANGE, function() {
-                hasUnsavedChanges = true;
-                updateStatus('Unsaved changes', 'warning');
-            });
-            
-            // Track when changes are saved
-            window.addEventListener('diagram-saved', function() {
-                hasUnsavedChanges = false;
-            });
-        } catch (error) {
-            console.error('Failed to setup change tracking:', error);
-        }
-    }
-    
-    function overrideSaveActions() {
-        try {
-            // Override the default save action
-            if (window.ui.actions && window.ui.actions.actions.save) {
-                const originalSave = window.ui.actions.actions.save.funct;
-                window.ui.actions.actions.save.funct = function() {
-                    console.log('Save action intercepted');
-                    handleSaveAndReturn();
-                };
-            }
-        } catch (error) {
-            console.error('Failed to override save actions:', error);
-        }
-    }
-
-    function handleSaveAndReturn() {
-        updateStatus('Saving diagram...', 'info');
-        
-        try {
-            const { imageData, diagramData } = exportDiagram();
-            
-            // Send to parent window
-            const success = sendToParent({
-                action: 'diagram_saved',
-                imageData: imageData,
-                diagramData: diagramData,
-                sessionId: sessionId
-            });
-            
-            if (success) {
-                // Dispatch custom event
-                window.dispatchEvent(new CustomEvent('diagram-saved'));
-                
-                updateStatus('Saved! Returning to document...', 'success');
-                
-                // Close window after a short delay
-                setTimeout(() => {
-                    try {
-                        window.close();
-                    } catch (e) {
-                        // If window.close() fails, try to redirect back
-                        if (parentOrigin) {
-                            window.location.href = parentOrigin;
-                        }
-                    }
-                }, 800);
-            } else {
-                throw new Error('Failed to communicate with parent window');
-            }
-            
-        } catch (error) {
-            console.error('Save failed:', error);
-            updateStatus('Save failed!', 'error');
-            alert('Failed to save diagram. Please try again.');
-        }
-    }
-    
-    function handleAutoSave() {
-        updateStatus('Auto-saving...', 'info');
-        
-        try {
-            const { imageData, diagramData } = exportDiagram();
-            
-            // Send to parent window
-            const success = sendToParent({
-                action: 'diagram_auto_saved',
-                imageData: imageData,
-                diagramData: diagramData,
-                sessionId: sessionId
-            });
-            
-            if (success) {
-                // Dispatch custom event
-                window.dispatchEvent(new CustomEvent('diagram-saved'));
-                
-                updateStatus('Auto-saved!', 'success');
-                
-                // Reset status after 3 seconds
-                setTimeout(() => {
-                    updateStatus('Ready', 'info');
-                }, 3000);
-            } else {
-                throw new Error('Failed to communicate with parent window');
-            }
-            
-        } catch (error) {
-            console.error('Auto-save failed:', error);
-            updateStatus('Auto-save failed!', 'error');
-        }
-    }
-    
+    // Add status indicator
     function addStatusIndicator() {
-        if (document.getElementById('custom-status')) {
-            return; // Already added
+        const existingStatus = document.getElementById('custom-status');
+        if (existingStatus) {
+            existingStatus.remove();
         }
         
         const statusDiv = document.createElement('div');
         statusDiv.id = 'custom-status';
         statusDiv.style.cssText = `
             position: fixed !important;
-            top: 10px !important;
-            left: 50% !important;
-            transform: translateX(-50%) !important;
-            background: rgba(255, 255, 255, 0.95) !important;
-            border: 1px solid rgba(0,0,0,0.1) !important;
-            border-radius: 20px !important;
-            padding: 8px 16px !important;
+            bottom: 20px !important;
+            right: 20px !important;
+            background: rgba(0,0,0,0.8) !important;
+            color: white !important;
+            padding: 8px 12px !important;
+            border-radius: 4px !important;
             font-size: 12px !important;
-            font-weight: 500 !important;
-            z-index: 9999 !important;
-            backdrop-filter: blur(10px) !important;
-            box-shadow: 0 4px 12px rgba(0,0,0,0.1) !important;
-            transition: all 0.3s ease !important;
+            z-index: 99998 !important;
+            pointer-events: none !important;
         `;
-        statusDiv.innerHTML = '✅ Ready';
+        statusDiv.textContent = `Session: ${sessionId}`;
         document.body.appendChild(statusDiv);
     }
     
-    function updateStatus(message, type = 'info') {
-        const statusDiv = document.getElementById('custom-status');
-        if (statusDiv) {
-            const icons = {
-                info: '📝',
-                success: '✅',
-                error: '❌',
-                warning: '⚠️'
-            };
+    // Handle save and return
+    function handleSaveAndReturn() {
+        try {
+            console.log('Saving diagram and returning...');
             
-            const colors = {
-                info: { bg: 'rgba(227, 242, 253, 0.95)', border: 'rgba(33, 150, 243, 0.2)' },
-                success: { bg: 'rgba(232, 245, 232, 0.95)', border: 'rgba(76, 175, 80, 0.2)' },
-                error: { bg: 'rgba(255, 235, 238, 0.95)', border: 'rgba(244, 67, 54, 0.2)' },
-                warning: { bg: 'rgba(255, 243, 224, 0.95)', border: 'rgba(255, 152, 0, 0.2)' }
-            };
+            if (!window.ui || !window.ui.editor || !window.ui.editor.graph) {
+                console.error('Draw.io editor not available');
+                return;
+            }
             
-            statusDiv.innerHTML = `${icons[type]} ${message}`;
-            statusDiv.style.background = colors[type].bg;
-            statusDiv.style.borderColor = colors[type].border;
+            // Get the diagram XML
+            const graph = window.ui.editor.graph;
+            const encoder = new mxCodec();
+            const node = encoder.encode(graph.getModel());
+            const diagramXml = mxUtils.getXml(node);
+            const diagramData = btoa(diagramXml);
+            
+            // Generate image
+            generateDiagramImage((imageData) => {
+                sendToParent({
+                    action: 'diagram_saved',
+                    sessionId: sessionId,
+                    imageData: imageData,
+                    diagramData: diagramData,
+                    timestamp: Date.now()
+                });
+                
+                // Update status
+                updateStatus('Diagram saved successfully!');
+                
+                // Close window after a short delay
+                setTimeout(() => {
+                    window.close();
+                }, 1000);
+            });
+            
+        } catch (error) {
+            console.error('Error saving diagram:', error);
+            updateStatus('Error saving diagram');
         }
     }
     
+    // Handle auto-save
+    function handleAutoSave() {
+        try {
+            console.log('Auto-saving diagram...');
+            
+            if (!window.ui || !window.ui.editor || !window.ui.editor.graph) {
+                console.error('Draw.io editor not available');
+                return;
+            }
+            
+            const graph = window.ui.editor.graph;
+            const encoder = new mxCodec();
+            const node = encoder.encode(graph.getModel());
+            const diagramXml = mxUtils.getXml(node);
+            const diagramData = btoa(diagramXml);
+            
+            generateDiagramImage((imageData) => {
+                sendToParent({
+                    action: 'diagram_auto_saved',
+                    sessionId: sessionId,
+                    imageData: imageData,
+                    diagramData: diagramData,
+                    timestamp: Date.now()
+                });
+                
+                updateStatus('Auto-saved successfully!');
+            });
+            
+        } catch (error) {
+            console.error('Error auto-saving diagram:', error);
+            updateStatus('Error auto-saving diagram');
+        }
+    }
+    
+    // Generate diagram image
+    function generateDiagramImage(callback) {
+        try {
+            const graph = window.ui.editor.graph;
+            const bounds = graph.getGraphBounds();
+            const scale = 1;
+            
+            // Create canvas
+            const canvas = document.createElement('canvas');
+            const ctx = canvas.getContext('2d');
+            
+            // Set canvas size
+            canvas.width = Math.max(bounds.width * scale, 100);
+            canvas.height = Math.max(bounds.height * scale, 100);
+            
+            // Fill background
+            ctx.fillStyle = '#ffffff';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            
+            // Use draw.io's built-in export functionality
+            if (window.ui.editor.exportToCanvas) {
+                window.ui.editor.exportToCanvas(canvas, (canvas) => {
+                    const imageData = canvas.toDataURL('image/png');
+                    callback(imageData);
+                });
+            } else {
+                // Fallback method
+                const svgRoot = graph.view.getDrawPane().ownerSVGElement;
+                if (svgRoot) {
+                    const serializer = new XMLSerializer();
+                    const svgString = serializer.serializeToString(svgRoot);
+                    const svgBlob = new Blob([svgString], { type: 'image/svg+xml' });
+                    const url = URL.createObjectURL(svgBlob);
+                    
+                    const img = new Image();
+                    img.onload = () => {
+                        ctx.drawImage(img, 0, 0);
+                        const imageData = canvas.toDataURL('image/png');
+                        URL.revokeObjectURL(url);
+                        callback(imageData);
+                    };
+                    img.src = url;
+                } else {
+                    // Final fallback - create a simple placeholder
+                    ctx.fillStyle = '#f0f0f0';
+                    ctx.fillRect(0, 0, canvas.width, canvas.height);
+                    ctx.fillStyle = '#666666';
+                    ctx.font = '16px Arial';
+                    ctx.textAlign = 'center';
+                    ctx.fillText('Diagram Created', canvas.width / 2, canvas.height / 2);
+                    callback(canvas.toDataURL('image/png'));
+                }
+            }
+            
+        } catch (error) {
+            console.error('Error generating image:', error);
+            // Create error placeholder
+            const canvas = document.createElement('canvas');
+            const ctx = canvas.getContext('2d');
+            canvas.width = 300;
+            canvas.height = 200;
+            ctx.fillStyle = '#f0f0f0';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            ctx.fillStyle = '#666666';
+            ctx.font = '16px Arial';
+            ctx.textAlign = 'center';
+            ctx.fillText('Diagram Image', canvas.width / 2, canvas.height / 2);
+            callback(canvas.toDataURL('image/png'));
+        }
+    }
+    
+    // Setup change tracking
+    function setupChangeTracking() {
+        if (!window.ui || !window.ui.editor || !window.ui.editor.graph) {
+            return;
+        }
+        
+        const graph = window.ui.editor.graph;
+        const model = graph.getModel();
+        
+        // Listen for model changes
+        model.addListener(mxEvent.CHANGE, () => {
+            hasUnsavedChanges = true;
+            updateStatus('Unsaved changes');
+        });
+        
+        // Listen for graph changes
+        graph.addListener(mxEvent.CELLS_ADDED, () => {
+            hasUnsavedChanges = true;
+        });
+        
+        graph.addListener(mxEvent.CELLS_REMOVED, () => {
+            hasUnsavedChanges = true;
+        });
+        
+        graph.addListener(mxEvent.CELLS_MOVED, () => {
+            hasUnsavedChanges = true;
+        });
+    }
+    
+    // Override save actions
+    function overrideSaveActions() {
+        if (!window.ui || !window.ui.actions) {
+            return;
+        }
+        
+        const originalSave = window.ui.actions.get('save');
+        if (originalSave) {
+            const originalFunct = originalSave.funct;
+            originalSave.funct = function() {
+                handleSaveAndReturn();
+            };
+        }
+        
+        // Also override Ctrl+S
+        const originalKeyHandler = window.ui.keyHandler;
+        if (originalKeyHandler) {
+            originalKeyHandler.bindKey(83, true, () => {
+                handleSaveAndReturn();
+            });
+        }
+    }
+    
+    // Setup keyboard shortcuts
     function setupKeyboardShortcuts() {
-        document.addEventListener('keydown', function(e) {
-            if ((e.ctrlKey || e.metaKey) && e.key === 's') {
+        document.addEventListener('keydown', (e) => {
+            if (e.ctrlKey && e.key === 's') {
                 e.preventDefault();
                 handleSaveAndReturn();
             }
             
-            if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === 'S') {
+            if (e.ctrlKey && e.shiftKey && e.key === 'S') {
                 e.preventDefault();
                 handleAutoSave();
             }
         });
     }
     
+    // Setup message listeners
     function setupMessageListeners() {
-        window.addEventListener('message', function(event) {
+        window.addEventListener('message', (event) => {
             try {
                 const data = JSON.parse(event.data);
                 
                 if (data.action === 'trigger_save' && data.sessionId === sessionId) {
                     handleSaveAndReturn();
-                } else if (data.action === 'trigger_auto_save' && data.sessionId === sessionId) {
-                    handleAutoSave();
+                } else if (data.action === 'heartbeat' && data.sessionId === sessionId) {
+                    // Respond to heartbeat
+                    sendToParent({
+                        action: 'heartbeat_response',
+                        sessionId: sessionId,
+                        timestamp: Date.now()
+                    });
                 }
             } catch (error) {
-                console.error('Error parsing message:', error);
+                // Ignore invalid messages
             }
         });
     }
     
+    // Setup auto-save
     function setupAutoSave() {
-        // Auto-save every 30 seconds if there are unsaved changes
-        setInterval(function() {
+        if (!autoSave) return;
+        
+        let autoSaveTimer;
+        const autoSaveInterval = 30000; // 30 seconds
+        
+        function resetAutoSaveTimer() {
+            clearTimeout(autoSaveTimer);
             if (hasUnsavedChanges) {
-                console.log('Auto-saving diagram...');
-                handleAutoSave();
+                autoSaveTimer = setTimeout(() => {
+                    handleAutoSave();
+                    hasUnsavedChanges = false;
+                }, autoSaveInterval);
             }
-        }, 30000);
+        }
+        
+        // Reset timer on any change
+        document.addEventListener('click', resetAutoSaveTimer);
+        document.addEventListener('keydown', resetAutoSaveTimer);
+        
+        // Initial timer
+        resetAutoSaveTimer();
     }
     
-    function exportDiagram() {
-        const graph = window.ui.editor.graph;
-        const xmlData = mxUtils.getXml(window.ui.editor.getGraphXml());
-        
-        // Create a temporary image using draw.io's built-in export
-        const bounds = graph.getGraphBounds();
-        const scale = 2;
-        const border = 20;
-        
-        // Use draw.io's export functionality
-        const imageExport = new mxImageExport();
-        const canvas = document.createElement('canvas');
-        const ctx = canvas.getContext('2d');
-        
-        canvas.width = Math.ceil(bounds.width * scale) + 2 * border;
-        canvas.height = Math.ceil(bounds.height * scale) + 2 * border;
-        
-        ctx.fillStyle = '#ffffff';
-        ctx.fillRect(0, 0, canvas.width, canvas.height);
-        
-        // Export using draw.io's built-in functionality
-        const xmlCanvas = new mxXmlCanvas2D(canvas);
-        xmlCanvas.translate(Math.floor(border - bounds.x * scale), Math.floor(border - bounds.y * scale));
-        xmlCanvas.scale(scale);
-        
-        const imgExport = new mxImageExport();
-        imgExport.drawState(graph.getView().getState(graph.model.root), xmlCanvas);
-        
-        const imageData = canvas.toDataURL('image/png', 0.9);
-        
-        return {
-            imageData: imageData,
-            diagramData: xmlData
-        };
+    // Update status indicator
+    function updateStatus(message) {
+        const statusDiv = document.getElementById('custom-status');
+        if (statusDiv) {
+            statusDiv.textContent = message;
+            
+            // Clear message after 3 seconds
+            setTimeout(() => {
+                statusDiv.textContent = `Session: ${sessionId}`;
+            }, 3000);
+        }
     }
     
-    function sendToParent(data) {
-        const message = JSON.stringify(data);
-        console.log('Sending message to parent:', data);
-        
-        // Try window.opener first (for popup windows)
-        if (window.opener && !window.opener.closed) {
+    // Send message to parent window
+    function sendToParent(message) {
+        if (parentOrigin) {
             try {
-                window.opener.postMessage(message, parentOrigin || '*');
-                console.log('Message sent to opener');
-                return true;
+                window.parent.postMessage(JSON.stringify(message), parentOrigin);
+                console.log('Message sent to parent:', message);
             } catch (error) {
-                console.error('Error sending to opener:', error);
+                console.error('Error sending message to parent:', error);
             }
         }
-        
-        // Fallback to window.parent (for iframes)
-        if (window.parent && window.parent !== window) {
-            try {
-                window.parent.postMessage(message, parentOrigin || '*');
-                console.log('Message sent to parent');
-                return true;
-            } catch (error) {
-                console.error('Error sending to parent:', error);
-            }
-        }
-        
-        console.error('No parent window available');
-        return false;
     }
     
-    // Handle window close
-    window.addEventListener('beforeunload', function(e) {
-        if (hasUnsavedChanges) {
-            const message = 'You have unsaved changes. Are you sure you want to leave?';
-            e.returnValue = message;
-            return message;
-        }
-        
-        // Send cancel message
-        sendToParent({
-            action: 'diagram_cancelled',
-            sessionId: sessionId
-        });
-    });
-    
-    // Multiple initialization strategies
+    // Initialize when DOM is ready
     if (document.readyState === 'loading') {
-        document.addEventListener('DOMContentLoaded', () => {
-            setTimeout(waitForDrawio, 100);
-        });
+        document.addEventListener('DOMContentLoaded', waitForDrawio);
     } else {
-        setTimeout(waitForDrawio, 100);
+        waitForDrawio();
     }
     
-    // Also listen for window load
+    // Also try to initialize when window loads
     window.addEventListener('load', () => {
-        setTimeout(waitForDrawio, 500);
+        if (!customButtonsAdded) {
+            setTimeout(waitForDrawio, 1000);
+        }
     });
     
-    // Force initialization after some time
-    setTimeout(() => {
-        if (!customButtonsAdded) {
-            console.log('Force initializing after timeout');
-            waitForDrawio();
-        }
-    }, 3000);
+    // Expose functions for debugging
+    window.customDrawioIntegration = {
+        addFloatingButtons,
+        handleSaveAndReturn,
+        handleAutoSave,
+        debugUIState,
+        sessionId: () => sessionId,
+        status: () => ({ customButtonsAdded, hasUnsavedChanges, sessionId })
+    };
     
-    console.log('Draw.io custom integration script loaded');
 })();
