@@ -358,6 +358,7 @@
 // })();
 
 
+// Enhanced custom-integration.js for draw.io
 (function() {
     'use strict';
     
@@ -367,7 +368,7 @@
     let hasUnsavedChanges = false;
     let customButtonsAdded = false;
     let initializationRetries = 0;
-    const MAX_INIT_RETRIES = 30;
+    const MAX_INIT_RETRIES = 50; // Increased retries
     
     // Debug function to log UI state
     function debugUIState() {
@@ -383,6 +384,17 @@
         console.log('Available toolbars:', document.querySelectorAll('.geMenubar, .geToolbar, #geMenubar, .geMenubarContainer').length);
         console.log('Body classes:', document.body.className);
         console.log('Available divs:', document.querySelectorAll('div').length);
+        
+        // Check if draw.io app is initialized
+        if (typeof App !== 'undefined' && App.main) {
+            console.log('App.main exists:', !!App.main);
+            console.log('App.main.ui exists:', !!(App.main && App.main.ui));
+        }
+        
+        // Check for global ui references
+        const globalUi = window.ui || (typeof App !== 'undefined' && App.main && App.main.ui);
+        console.log('Global UI reference:', !!globalUi);
+        
         console.log('=============================');
     }
     
@@ -394,28 +406,100 @@
             debugUIState();
         }
         
-        // Check multiple conditions for draw.io readiness
+        // Multiple ways to check for draw.io readiness
+        let ui = window.ui;
+        
+        // If window.ui is not available, try App.main.ui
+        if (!ui && typeof App !== 'undefined' && App.main) {
+            ui = App.main.ui;
+            if (ui) {
+                console.log('Found UI via App.main.ui');
+                window.ui = ui; // Set it globally for consistency
+            }
+        }
+        
+        // Alternative: Check if EditorUi is available and try to get the current instance
+        if (!ui && typeof EditorUi !== 'undefined') {
+            // Try to find the current EditorUi instance
+            const elements = document.querySelectorAll('*');
+            for (let el of elements) {
+                if (el.editorUi) {
+                    ui = el.editorUi;
+                    console.log('Found UI via DOM element');
+                    window.ui = ui;
+                    break;
+                }
+            }
+        }
+        
+        // Check if we have a working UI instance
         const isDrawioReady = (
-            typeof EditorUi !== 'undefined' && 
-            window.ui && 
-            window.ui.editor && 
-            window.ui.editor.graph &&
-            window.ui.actions &&
+            ui && 
+            ui.editor && 
+            ui.editor.graph &&
+            ui.actions &&
             document.readyState === 'complete' &&
             document.body.children.length > 0
         );
         
         if (isDrawioReady) {
             console.log('Draw.io fully loaded, initializing custom integration...');
+            // Set the global reference
+            window.ui = ui;
+            
             // Add a small delay to ensure UI is fully rendered
             setTimeout(() => {
                 initCustomIntegration();
             }, 1000);
         } else if (initializationRetries < MAX_INIT_RETRIES) {
-            setTimeout(waitForDrawio, 500);
+            setTimeout(waitForDrawio, 300); // Reduced interval for faster detection
         } else {
             console.error('Failed to initialize draw.io after maximum retries');
-            // Force try to add floating buttons as fallback
+            console.log('Attempting fallback initialization...');
+            
+            // Try to force find the UI
+            attemptFallbackInitialization();
+        }
+    }
+    
+    // Fallback initialization method
+    function attemptFallbackInitialization() {
+        console.log('Attempting fallback initialization...');
+        
+        // Try to wait for the draw.io app to be ready using different methods
+        const checkMethods = [
+            () => window.ui,
+            () => typeof App !== 'undefined' && App.main && App.main.ui,
+            () => {
+                // Try to find UI in window object
+                for (let key in window) {
+                    if (window[key] && typeof window[key] === 'object' && window[key].editor && window[key].editor.graph) {
+                        return window[key];
+                    }
+                }
+                return null;
+            }
+        ];
+        
+        let ui = null;
+        for (let method of checkMethods) {
+            try {
+                ui = method();
+                if (ui) {
+                    console.log('Found UI via fallback method');
+                    window.ui = ui;
+                    break;
+                }
+            } catch (error) {
+                console.log('Fallback method failed:', error);
+            }
+        }
+        
+        if (ui) {
+            initCustomIntegration();
+        } else {
+            // Final fallback - just add floating buttons
+            console.log('Adding floating buttons as final fallback');
             setTimeout(() => {
                 addFloatingButtons();
                 notifyParentOfButtonsReady();
@@ -481,8 +565,15 @@
         try {
             const diagramData = atob(existingDiagram);
             const doc = mxUtils.parseXml(diagramData);
-            window.ui.editor.setGraphXml(doc.documentElement);
-            console.log('Existing diagram loaded successfully');
+            
+            // Ensure we have a valid UI reference
+            const ui = window.ui || (typeof App !== 'undefined' && App.main && App.main.ui);
+            if (ui && ui.editor) {
+                ui.editor.setGraphXml(doc.documentElement);
+                console.log('Existing diagram loaded successfully');
+            } else {
+                console.error('No valid UI reference for loading diagram');
+            }
         } catch (error) {
             console.error('Failed to load existing diagram:', error);
         }
@@ -733,17 +824,23 @@
         try {
             console.log('Saving diagram and returning...');
             
-            if (!window.ui || !window.ui.editor || !window.ui.editor.graph) {
+            // Get the UI reference
+            const ui = window.ui || (typeof App !== 'undefined' && App.main && App.main.ui);
+            
+            if (!ui || !ui.editor || !ui.editor.graph) {
                 console.error('Draw.io editor not available');
+                updateStatus('Error: Editor not available');
                 return;
             }
             
             // Get the diagram XML
-            const graph = window.ui.editor.graph;
+            const graph = ui.editor.graph;
             const encoder = new mxCodec();
             const node = encoder.encode(graph.getModel());
             const diagramXml = mxUtils.getXml(node);
             const diagramData = btoa(diagramXml);
+            
+            console.log('Diagram data generated successfully');
             
             // Generate image
             generateDiagramImage((imageData) => {
@@ -775,12 +872,15 @@
         try {
             console.log('Auto-saving diagram...');
             
-            if (!window.ui || !window.ui.editor || !window.ui.editor.graph) {
+            // Get the UI reference
+            const ui = window.ui || (typeof App !== 'undefined' && App.main && App.main.ui);
+            
+            if (!ui || !ui.editor || !ui.editor.graph) {
                 console.error('Draw.io editor not available');
                 return;
             }
             
-            const graph = window.ui.editor.graph;
+            const graph = ui.editor.graph;
             const encoder = new mxCodec();
             const node = encoder.encode(graph.getModel());
             const diagramXml = mxUtils.getXml(node);
@@ -807,7 +907,15 @@
     // Generate diagram image
     function generateDiagramImage(callback) {
         try {
-            const graph = window.ui.editor.graph;
+            const ui = window.ui || (typeof App !== 'undefined' && App.main && App.main.ui);
+            
+            if (!ui || !ui.editor || !ui.editor.graph) {
+                console.error('No valid UI reference for image generation');
+                createFallbackImage(callback);
+                return;
+            }
+            
+            const graph = ui.editor.graph;
             const bounds = graph.getGraphBounds();
             const scale = 1;
             
@@ -824,8 +932,8 @@
             ctx.fillRect(0, 0, canvas.width, canvas.height);
             
             // Use draw.io's built-in export functionality
-            if (window.ui.editor.exportToCanvas) {
-                window.ui.editor.exportToCanvas(canvas, (canvas) => {
+            if (ui.editor.exportToCanvas) {
+                ui.editor.exportToCanvas(canvas, (canvas) => {
                     const imageData = canvas.toDataURL('image/png');
                     callback(imageData);
                 });
@@ -847,41 +955,41 @@
                     };
                     img.src = url;
                 } else {
-                    // Final fallback - create a simple placeholder
-                    ctx.fillStyle = '#f0f0f0';
-                    ctx.fillRect(0, 0, canvas.width, canvas.height);
-                    ctx.fillStyle = '#666666';
-                    ctx.font = '16px Arial';
-                    ctx.textAlign = 'center';
-                    ctx.fillText('Diagram Created', canvas.width / 2, canvas.height / 2);
-                    callback(canvas.toDataURL('image/png'));
+                    createFallbackImage(callback);
                 }
             }
             
         } catch (error) {
             console.error('Error generating image:', error);
-            // Create error placeholder
-            const canvas = document.createElement('canvas');
-            const ctx = canvas.getContext('2d');
-            canvas.width = 300;
-            canvas.height = 200;
-            ctx.fillStyle = '#f0f0f0';
-            ctx.fillRect(0, 0, canvas.width, canvas.height);
-            ctx.fillStyle = '#666666';
-            ctx.font = '16px Arial';
-            ctx.textAlign = 'center';
-            ctx.fillText('Diagram Image', canvas.width / 2, canvas.height / 2);
-            callback(canvas.toDataURL('image/png'));
+            createFallbackImage(callback);
         }
+    }
+    
+    // Create fallback image
+    function createFallbackImage(callback) {
+        const canvas = document.createElement('canvas');
+        const ctx = canvas.getContext('2d');
+        canvas.width = 300;
+        canvas.height = 200;
+        ctx.fillStyle = '#f0f0f0';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        ctx.fillStyle = '#666666';
+        ctx.font = '16px Arial';
+        ctx.textAlign = 'center';
+        ctx.fillText('Diagram Created', canvas.width / 2, canvas.height / 2);
+        callback(canvas.toDataURL('image/png'));
     }
     
     // Setup change tracking
     function setupChangeTracking() {
-        if (!window.ui || !window.ui.editor || !window.ui.editor.graph) {
+        const ui = window.ui || (typeof App !== 'undefined' && App.main && App.main.ui);
+        
+        if (!ui || !ui.editor || !ui.editor.graph) {
+            console.log('Cannot setup change tracking - UI not available');
             return;
         }
         
-        const graph = window.ui.editor.graph;
+        const graph = ui.editor.graph;
         const model = graph.getModel();
         
         // Listen for model changes
@@ -902,28 +1010,35 @@
         graph.addListener(mxEvent.CELLS_MOVED, () => {
             hasUnsavedChanges = true;
         });
+        
+        console.log('Change tracking setup successfully');
     }
     
     // Override save actions
     function overrideSaveActions() {
-        if (!window.ui || !window.ui.actions) {
+        const ui = window.ui || (typeof App !== 'undefined' && App.main && App.main.ui);
+        
+        if (!ui || !ui.actions) {
+            console.log('Cannot override save actions - UI not available');
             return;
         }
         
-        const originalSave = window.ui.actions.get('save');
+        const originalSave = ui.actions.get('save');
         if (originalSave) {
             const originalFunct = originalSave.funct;
             originalSave.funct = function() {
                 handleSaveAndReturn();
             };
+            console.log('Save action overridden');
         }
         
         // Also override Ctrl+S
-        const originalKeyHandler = window.ui.keyHandler;
+        const originalKeyHandler = ui.keyHandler;
         if (originalKeyHandler) {
             originalKeyHandler.bindKey(83, true, () => {
                 handleSaveAndReturn();
             });
+            console.log('Ctrl+S shortcut overridden');
         }
     }
     
@@ -940,6 +1055,8 @@
                 handleAutoSave();
             }
         });
+        
+        console.log('Keyboard shortcuts setup');
     }
     
     // Setup message listeners
@@ -949,6 +1066,7 @@
                 const data = JSON.parse(event.data);
                 
                 if (data.action === 'trigger_save' && data.sessionId === sessionId) {
+                    console.log('Received trigger_save message');
                     handleSaveAndReturn();
                 } else if (data.action === 'heartbeat' && data.sessionId === sessionId) {
                     // Respond to heartbeat
@@ -962,6 +1080,8 @@
                 // Ignore invalid messages
             }
         });
+        
+        console.log('Message listeners setup');
     }
     
     // Setup auto-save
@@ -987,6 +1107,8 @@
         
         // Initial timer
         resetAutoSaveTimer();
+        
+        console.log('Auto-save setup');
     }
     
     // Update status indicator
@@ -1014,19 +1136,41 @@
         }
     }
     
-    // Initialize when DOM is ready
-    if (document.readyState === 'loading') {
-        document.addEventListener('DOMContentLoaded', waitForDrawio);
-    } else {
-        waitForDrawio();
+    // Multiple initialization attempts
+    function initializeWithRetry() {
+        // Try immediate initialization
+        if (document.readyState === 'complete') {
+            waitForDrawio();
+        } else {
+            document.addEventListener('DOMContentLoaded', waitForDrawio);
+        }
+        
+        // Also try when window loads
+        window.addEventListener('load', () => {
+            if (!customButtonsAdded) {
+                setTimeout(waitForDrawio, 1000);
+            }
+        });
+        
+        // Try after a delay (in case draw.io takes time to initialize)
+        setTimeout(() => {
+            if (!customButtonsAdded) {
+                console.log('Retry initialization after delay');
+                waitForDrawio();
+            }
+        }, 3000);
+        
+        // Final retry after longer delay
+        setTimeout(() => {
+            if (!customButtonsAdded) {
+                console.log('Final retry initialization');
+                attemptFallbackInitialization();
+            }
+        }, 10000);
     }
     
-    // Also try to initialize when window loads
-    window.addEventListener('load', () => {
-        if (!customButtonsAdded) {
-            setTimeout(waitForDrawio, 1000);
-        }
-    });
+    // Start initialization
+    initializeWithRetry();
     
     // Expose functions for debugging
     window.customDrawioIntegration = {
@@ -1035,7 +1179,9 @@
         handleAutoSave,
         debugUIState,
         sessionId: () => sessionId,
-        status: () => ({ customButtonsAdded, hasUnsavedChanges, sessionId })
+        status: () => ({ customButtonsAdded, hasUnsavedChanges, sessionId }),
+        forceInit: () => waitForDrawio(),
+        fallbackInit: () => attemptFallbackInitialization()
     };
     
 })();
